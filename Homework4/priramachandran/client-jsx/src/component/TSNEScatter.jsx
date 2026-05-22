@@ -1,7 +1,7 @@
 import * as d3 from "d3";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { debounce, isEmpty } from "lodash";
-import tsneCsvRaw from "../../data/tsne.csv?raw";
+import { fetchTsneAll } from "../api";
 
 const STOCK_NAMES = {
   AAPL: "Apple Inc.",
@@ -28,18 +28,20 @@ const STOCK_NAMES = {
 
 const margin = { top: 36, right: 132, bottom: 52, left: 56 };
 
-function parseTsne(raw) {
-  return d3.csvParse(raw, (row) => {
-    const x = +row.x;
-    const y = +row.y;
-    if (Number.isNaN(x) || Number.isNaN(y)) return null;
-    return {
-      ticker: String(row.ticker).trim(),
-      x,
-      y,
-      category: String(row.category).trim(),
-    };
-  }).filter(Boolean);
+function parseTsneRows(apiRows) {
+  return (apiRows ?? [])
+    .map((row) => {
+      const x = +row.x;
+      const y = +row.y;
+      if (Number.isNaN(x) || Number.isNaN(y)) return null;
+      return {
+        ticker: String(row.Stock).trim(),
+        x,
+        y,
+        category: String(row.category ?? "").trim(),
+      };
+    })
+    .filter(Boolean);
 }
 
 function drawScatter(
@@ -265,13 +267,37 @@ function drawScatter(
 export function TSNEScatter({ selectedTicker }) {
   const containerRef = useRef(null);
   const svgRef = useRef(null);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const rows = useMemo(() => parseTsne(tsneCsvRaw), []);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetchTsneAll()
+      .then((data) => {
+        if (cancelled) return;
+        setRows(parseTsneRows(data));
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setRows([]);
+        setError(err.message);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
     const svg = svgRef.current;
-    if (!el || !svg) return;
+    if (!el || !svg || loading) return;
 
     const ro = new ResizeObserver(
       debounce((entries) => {
@@ -288,10 +314,16 @@ export function TSNEScatter({ selectedTicker }) {
     if (w > 0 && h > 0) drawScatter(svg, rows, selectedTicker, w, h);
 
     return () => ro.disconnect();
-  }, [rows, selectedTicker]);
+  }, [rows, selectedTicker, loading]);
 
   return (
-    <div ref={containerRef} className="h-full w-full min-h-[220px]">
+    <div ref={containerRef} className="relative h-full w-full min-h-[220px]">
+      {loading && (
+        <p className="absolute left-3 top-2 z-10 text-sm text-slate-500">Loading t-SNE…</p>
+      )}
+      {error && (
+        <p className="absolute left-3 top-2 z-10 text-sm text-red-600">{error}</p>
+      )}
       <svg ref={svgRef} className="block h-full w-full overflow-visible" role="img" aria-label="t-SNE scatter plot of stocks" />
     </div>
   );

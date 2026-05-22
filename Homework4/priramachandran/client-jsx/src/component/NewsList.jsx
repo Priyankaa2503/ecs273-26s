@@ -1,38 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
+import { fetchStockNews } from "../api";
 
-const newsFileLoaders = import.meta.glob("../../data/stocknews/*/*.txt", {
-  query: "?raw",
-  import: "default",
-});
-
-function parseNewsFile(path, raw) {
-  const lines = raw.split("\n");
-  const titleLine = lines.find((line) => line.startsWith("Title:"));
-  const dateLine = lines.find((line) => line.startsWith("Date:"));
-  const contentIdx = lines.findIndex((line) => line.startsWith("Content:"));
-
-  if (!titleLine || !dateLine || contentIdx < 0) return null;
-
-  const tickerMatch = path.match(/stocknews\/([^/]+)\//);
-  const ticker = tickerMatch ? tickerMatch[1] : "";
-
-  const title = titleLine.replace("Title:", "").trim();
-  const dateRaw = dateLine.replace("Date:", "").trim();
-  const content = lines.slice(contentIdx + 1).join("\n").trim();
-
+function formatDateLabel(dateRaw) {
   const parsedDate = new Date(dateRaw);
-  const dateLabel =
-    !Number.isNaN(+parsedDate) && dateRaw
-      ? parsedDate.toLocaleString()
-      : dateRaw || "Unknown date";
+  return !Number.isNaN(+parsedDate) && dateRaw
+    ? parsedDate.toLocaleString()
+    : dateRaw || "Unknown date";
+}
 
+function mapNewsArticle(article) {
+  const dateRaw = article.Date ?? "";
   return {
-    id: path,
-    ticker,
-    title,
+    id: article._id ?? `${article.Stock}-${article.Title}-${dateRaw}`,
+    ticker: article.Stock,
+    title: article.Title,
     dateRaw,
-    dateLabel,
-    content,
+    dateLabel: formatDateLabel(dateRaw),
+    content: article.content ?? "",
   };
 }
 
@@ -40,6 +24,7 @@ export function NewsList({ ticker }) {
   const [expandedId, setExpandedId] = useState(null);
   const [newsItems, setNewsItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,21 +32,20 @@ export function NewsList({ ticker }) {
     async function loadTickerNews() {
       setLoading(true);
       setExpandedId(null);
+      setError(null);
 
-      const matchedEntries = Object.entries(newsFileLoaders).filter(([path]) =>
-        path.includes(`/stocknews/${ticker}/`)
-      );
-
-      const loaded = await Promise.all(
-        matchedEntries.map(async ([path, loader]) => {
-          const raw = await loader();
-          return parseNewsFile(path, raw);
-        })
-      );
-
-      if (cancelled) return;
-      setNewsItems(loaded.filter(Boolean));
-      setLoading(false);
+      try {
+        const payload = await fetchStockNews(ticker);
+        if (cancelled) return;
+        const items = (payload.News ?? []).map(mapNewsArticle);
+        setNewsItems(items);
+      } catch (err) {
+        if (cancelled) return;
+        setNewsItems([]);
+        setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
 
     loadTickerNews();
@@ -78,6 +62,8 @@ export function NewsList({ ticker }) {
     <div className="h-full w-full overflow-y-auto p-2">
       {loading ? (
         <p className="text-sm text-slate-500">Loading news for {ticker}...</p>
+      ) : error ? (
+        <p className="text-sm text-red-600">{error}</p>
       ) : sortedNews.length === 0 ? (
         <p className="text-sm text-slate-500">No news found for {ticker}.</p>
       ) : (

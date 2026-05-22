@@ -1,21 +1,9 @@
 import * as d3 from "d3";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { debounce, isEmpty } from "lodash";
+import { fetchStockPrices } from "../api";
 
 const margin = { top: 28, right: 108, bottom: 52, left: 58 };
-
-const stockCsvRaw = import.meta.glob("../../data/stockdata/*.csv", {
-  eager: true,
-  query: "?raw",
-  import: "default",
-});
-
-function getRawCsvForSymbol(symbol) {
-  const hit = Object.entries(stockCsvRaw).find(([path]) =>
-    path.endsWith(`/${symbol}.csv`)
-  );
-  return hit ? hit[1] : "";
-}
 
 const SERIES = [
   { key: "open", label: "Open", color: "#0284c7", acc: (d) => d.open },
@@ -24,19 +12,22 @@ const SERIES = [
   { key: "close", label: "Close", color: "#7c3aed", acc: (d) => d.close },
 ];
 
-function parseRows(raw) {
-  if (!raw) return [];
-  const parsed = d3.csvParse(raw, (row) => {
-    const date = new Date(row.Date);
-    if (Number.isNaN(+date)) return null;
-    const open = +row.Open;
-    const high = +row.High;
-    const low = +row.Low;
-    const close = +row.Close;
-    if ([open, high, low, close].some((v) => Number.isNaN(v))) return null;
-    return { date, open, high, low, close };
-  });
-  return parsed.filter(Boolean);
+function parseStockSeries(stockSeries) {
+  if (!stockSeries?.length) return [];
+  return stockSeries
+    .map((row) => {
+      const date = new Date(row.date);
+      const open = +row.Open;
+      const high = +row.High;
+      const low = +row.Low;
+      const close = +row.Close;
+      if (Number.isNaN(+date) || [open, high, low, close].some((v) => Number.isNaN(v))) {
+        return null;
+      }
+      return { date, open, high, low, close };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.date - b.date);
 }
 
 function innerPlotWidth(viewportWidth, dataLength, zoom) {
@@ -56,7 +47,7 @@ function drawChart(svgElement, symbol, data, viewportWidth, height, zoom) {
       .attr("y", height / 2)
       .attr("text-anchor", "middle")
       .attr("fill", "#64748b")
-      .text(`No CSV data for ${symbol}.`);
+      .text(`No price data for ${symbol}.`);
     return;
   }
 
@@ -187,8 +178,32 @@ export function StockLineChart({ symbol }) {
   const pendingScrollRef = useRef(null);
   const [zoom, setZoom] = useState(1);
   const [dims, setDims] = useState({ w: 0, h: 0 });
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  const data = useMemo(() => parseRows(getRawCsvForSymbol(symbol)), [symbol]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetchStockPrices(symbol)
+      .then((payload) => {
+        if (cancelled) return;
+        setData(parseStockSeries(payload.stock_series));
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setData([]);
+        setError(err.message);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol]);
 
   useEffect(() => {
     setZoom(1);
@@ -260,6 +275,12 @@ export function StockLineChart({ symbol }) {
 
   return (
     <div className="flex h-full w-full min-h-[220px] flex-col">
+      {loading && (
+        <p className="px-3 py-1 text-sm text-slate-500">Loading prices for {symbol}…</p>
+      )}
+      {error && (
+        <p className="px-3 py-1 text-sm text-red-600">{error}</p>
+      )}
       <div
         ref={scrollRef}
         className="min-h-[180px] flex-1 w-full overflow-x-auto overflow-y-hidden rounded-b-lg"

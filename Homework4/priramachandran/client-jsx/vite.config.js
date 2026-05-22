@@ -8,4 +8,12 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      "/stock_list": "http://localhost:8000",
+      "/stock": "http://localhost:8000",
+      "/stocknews": "http://localhost:8000",
+      "/tsne": "http://localhost:8000",
+    },
+  },
 })
