@@ -39,6 +39,12 @@ function parseRows(raw) {
   return parsed.filter(Boolean);
 }
 
+function innerPlotWidth(viewportWidth, dataLength, zoom) {
+  const base = viewportWidth - margin.left - margin.right;
+  const zoomed = Math.max(dataLength - 1, 1) * 2 * zoom;
+  return Math.max(base, zoomed);
+}
+
 function drawChart(svgElement, symbol, data, viewportWidth, height, zoom) {
   const svg = d3.select(svgElement);
   svg.selectAll("*").remove();
@@ -54,10 +60,7 @@ function drawChart(svgElement, symbol, data, viewportWidth, height, zoom) {
     return;
   }
 
-  const innerPlotW = Math.max(
-    viewportWidth - margin.left - margin.right,
-    Math.max(data.length - 1, 1) * 2 * zoom
-  );
+  const innerPlotW = innerPlotWidth(viewportWidth, data.length, zoom);
 
   const svgWidth = margin.left + innerPlotW + margin.right;
   const innerH = height - margin.top - margin.bottom;
@@ -181,6 +184,7 @@ function drawChart(svgElement, symbol, data, viewportWidth, height, zoom) {
 export function StockLineChart({ symbol }) {
   const scrollRef = useRef(null);
   const svgRef = useRef(null);
+  const pendingScrollRef = useRef(null);
   const [zoom, setZoom] = useState(1);
   const [dims, setDims] = useState({ w: 0, h: 0 });
 
@@ -188,19 +192,38 @@ export function StockLineChart({ symbol }) {
 
   useEffect(() => {
     setZoom(1);
+    pendingScrollRef.current = null;
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
   }, [symbol]);
 
   useEffect(() => {
     const scrollEl = scrollRef.current;
     if (!scrollEl) return;
     const onWheel = (e) => {
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+
       e.preventDefault();
+      const rect = scrollEl.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const contentX = scrollEl.scrollLeft + mouseX;
       const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      setZoom((z) => Math.min(8, Math.max(1, z * factor)));
+      const dataLen = data.length;
+
+      setZoom((z) => {
+        const next = Math.min(8, Math.max(1, z * factor));
+        if (next === z || !dims.w || dataLen < 2) return z;
+
+        const oldInner = innerPlotWidth(dims.w, dataLen, z);
+        const newInner = innerPlotWidth(dims.w, dataLen, next);
+        pendingScrollRef.current = {
+          scrollLeft: contentX * (newInner / oldInner) - mouseX,
+        };
+        return next;
+      });
     };
     scrollEl.addEventListener("wheel", onWheel, { passive: false });
     return () => scrollEl.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [data.length, dims.w]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -225,6 +248,14 @@ export function StockLineChart({ symbol }) {
   useEffect(() => {
     if (!svgRef.current || !dims.w || !dims.h) return;
     drawChart(svgRef.current, symbol, data, dims.w, dims.h, zoom);
+
+    const scrollEl = scrollRef.current;
+    const pending = pendingScrollRef.current;
+    if (!scrollEl || pending == null) return;
+
+    const maxScroll = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+    scrollEl.scrollLeft = Math.max(0, Math.min(pending.scrollLeft, maxScroll));
+    pendingScrollRef.current = null;
   }, [symbol, data, dims, zoom]);
 
   return (
